@@ -4,7 +4,6 @@ use std::pin::{Pin, pin};
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use crossbeam_channel::Sender;
 use futures::channel::mpsc;
 use futures::future::Fuse;
 use futures::stream::StreamFuture;
@@ -18,9 +17,9 @@ use super::executor::{JoinHandle, Task};
 /// Context enabling tasks to communicate with the parent Command,
 /// specifically submit effects, events and spawn further tasks
 pub struct CommandContext<Effect, Event> {
-    pub(crate) effects: Sender<Effect>,
-    pub(crate) events: Sender<Event>,
-    pub(crate) tasks: Sender<Task>,
+    pub(crate) effects: mpsc::UnboundedSender<Effect>,
+    pub(crate) events: mpsc::UnboundedSender<Event>,
+    pub(crate) tasks: mpsc::UnboundedSender<Task>,
     pub(crate) rc: Arc<()>,
 }
 
@@ -47,7 +46,7 @@ impl<Effect, Event> CommandContext<Effect, Event> {
         let request = Request::resolves_never(operation);
 
         self.effects
-            .send(request.into())
+            .unbounded_send(request.into())
             .expect("Command could not send notification, effect channel disconnected");
     }
 
@@ -78,7 +77,7 @@ impl<Effect, Event> CommandContext<Effect, Event> {
             let effects = self.effects.clone();
             move || {
                 effects
-                    .send(effect)
+                    .unbounded_send(effect)
                     .expect("Command could not send request effect, effect channel disconnected");
             }
         };
@@ -115,7 +114,7 @@ impl<Effect, Event> CommandContext<Effect, Event> {
             let effects = self.effects.clone();
             move || {
                 effects
-                    .send(effect)
+                    .unbounded_send(effect)
                     .expect("Command could not send stream effect, effect channel disconnected");
             }
         };
@@ -128,7 +127,7 @@ impl<Effect, Event> CommandContext<Effect, Event> {
     #[allow(clippy::missing_panics_doc)]
     pub fn send_event(&self, event: Event) {
         self.events
-            .send(event)
+            .unbounded_send(event)
             .expect("Command could not send event, event channel disconnected");
     }
 
@@ -162,7 +161,7 @@ impl<Effect, Event> CommandContext<Effect, Event> {
         };
 
         self.tasks
-            .send(task)
+            .unbounded_send(task)
             .expect("Command could not spawn task, tasks channel disconnected");
 
         handle

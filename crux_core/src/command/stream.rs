@@ -6,9 +6,8 @@ use std::task::{Context, Poll};
 
 use std::pin::Pin;
 
-use futures::{Sink, Stream, StreamExt as _};
+use futures::{Sink, Stream, StreamExt as _, channel::mpsc};
 
-use crossbeam_channel::Sender;
 use thiserror::Error;
 
 use super::Command;
@@ -36,11 +35,11 @@ where
         // Check events first to preserve the order in which items were emitted. This is because
         // sending events doesn't yield, and the next request/stream await point will be
         // reached in the same poll, so any follow up effects will _also_ be available
-        if let Ok(event) = self.events.try_recv() {
+        if let Poll::Ready(Some(event)) = self.events.poll_next_unpin(cx) {
             return Poll::Ready(Some(CommandOutput::Event(event)));
         }
 
-        if let Ok(effect) = self.effects.try_recv() {
+        if let Poll::Ready(Some(effect)) = self.effects.poll_next_unpin(cx) {
             return Poll::Ready(Some(CommandOutput::Effect(effect)));
         }
 
@@ -54,12 +53,12 @@ where
 
 /// A sink for a Command stream, sending all emitted effects and events into a pair of channels
 pub(crate) struct CommandSink<Effect, Event> {
-    pub(crate) effects: Sender<Effect>,
-    pub(crate) events: Sender<Event>,
+    pub(crate) effects: mpsc::UnboundedSender<Effect>,
+    pub(crate) events: mpsc::UnboundedSender<Event>,
 }
 
 impl<Effect, Event> CommandSink<Effect, Event> {
-    pub(crate) fn new(effects: Sender<Effect>, events: Sender<Event>) -> Self {
+    pub(crate) fn new(effects: mpsc::UnboundedSender<Effect>, events: mpsc::UnboundedSender<Event>) -> Self {
         Self { effects, events }
     }
 }
@@ -86,11 +85,11 @@ impl<Effect, Event> Sink<CommandOutput<Effect, Event>> for CommandSink<Effect, E
         match item {
             CommandOutput::Effect(effect) => self
                 .effects
-                .send(effect)
+                .unbounded_send(effect)
                 .map_err(|_| HostedCommandError::CannotSendEffect),
             CommandOutput::Event(event) => self
                 .events
-                .send(event)
+                .unbounded_send(event)
                 .map_err(|_| HostedCommandError::CannotSendEvent),
         }
     }
@@ -111,7 +110,7 @@ pub(crate) trait CommandStreamExt<Effect, Event>:
     ///
     /// This is useful if you need to multiplex several commands into the same stream of
     /// effects and events - like Crux does.
-    fn host(self, effects: Sender<Effect>, events: Sender<Event>) -> impl Future
+    fn host(self, effects: mpsc::UnboundedSender<Effect>, events: mpsc::UnboundedSender<Event>) -> impl Future
     where
         Self: Send + Sized,
     {

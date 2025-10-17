@@ -245,10 +245,10 @@ use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
-// TODO: consider switching to flume
 use crossbeam_channel::{Receiver, Sender};
+
 use executor::{AbortHandle, Task, TaskId};
-use futures::task::AtomicWaker;
+use futures::{channel::mpsc, task::AtomicWaker};
 use futures::{FutureExt as _, Stream, StreamExt as _};
 use slab::Slab;
 use stream::CommandStreamExt as _;
@@ -262,14 +262,14 @@ use crate::capability::Operation;
 
 #[must_use = "Unused commands never execute. Return the command from your app's update function or combine it with other commands with Command::and or Command::all"]
 pub struct Command<Effect, Event> {
-    effects: Receiver<Effect>,
-    events: Receiver<Event>,
+    effects: mpsc::UnboundedReceiver<Effect>,
+    events: mpsc::UnboundedReceiver<Event>,
     context: CommandContext<Effect, Event>,
 
     // Executor internals
     // TODO: should this be a separate type?
     ready_queue: Receiver<TaskId>,
-    spawn_queue: Receiver<Task>,
+    spawn_queue: mpsc::UnboundedReceiver<Task>,
     tasks: Slab<Task>,
     ready_sender: Sender<TaskId>, // Used in creating wakers for tasks
     waker: Arc<AtomicWaker>,      // Shared with task wakers when polled in async context
@@ -306,10 +306,10 @@ where
         // so a naughty Command can make massive amounts of requests or spawn a huge number of tasks.
         // If these channels supported async, the CommandContext methods could also be async and
         // we could give the channels some bounds
-        let (effect_sender, effect_receiver) = crossbeam_channel::unbounded();
-        let (event_sender, event_receiver) = crossbeam_channel::unbounded();
+        let (effect_sender, effect_receiver) = mpsc::unbounded();
+        let (event_sender, event_receiver) = mpsc::unbounded();
         let (ready_sender, ready_receiver) = crossbeam_channel::unbounded();
-        let (spawn_sender, spawn_receiver) = crossbeam_channel::unbounded();
+        let (spawn_sender, spawn_receiver) = mpsc::unbounded();
         let (_, waker_receiver) = crossbeam_channel::unbounded();
 
         let context = context::CommandContext {
@@ -455,14 +455,14 @@ where
     pub fn effects(&mut self) -> impl Iterator<Item = Effect> + '_ {
         self.run_until_settled();
 
-        self.effects.try_iter()
+        std::iter::from_fn(|| self.effects.try_next().ok().flatten())
     }
 
     /// Run the effect state machine until it settles and return an iterator over the events
     pub fn events(&mut self) -> impl Iterator<Item = Event> + '_ {
         self.run_until_settled();
 
-        self.events.try_iter()
+        std::iter::from_fn(|| self.events.try_next().ok().flatten())
     }
 
     // Combinators

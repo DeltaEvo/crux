@@ -231,7 +231,7 @@ impl<Effect, Event> Command<Effect, Event> {
     }
 
     pub(crate) fn spawn_new_tasks(&mut self) {
-        while let Ok(task) = self.spawn_queue.try_recv() {
+        while let Ok(Some(task)) = self.spawn_queue.try_next() {
             let task_id = self.tasks.insert(task);
 
             self.ready_sender
